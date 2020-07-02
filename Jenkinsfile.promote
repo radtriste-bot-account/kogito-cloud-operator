@@ -1,6 +1,8 @@
-// Promote images
+@Library('jenkins-pipeline-shared-libraries')_
 
 IMAGES = ["kogito-cloud-operator"]
+
+deployProperties = [:]
 
 pipeline {
     agent {
@@ -10,6 +12,17 @@ pipeline {
     parameters {
         string(name: 'DISPLAY_NAME', defaultValue: '', description: 'Setup a specific build display name')
 
+        // Deploy job url to retrieve deployment.properties
+        string(name: 'DEPLOY_BUILD_URL', defaultValue: '', description: 'URL to jenkins deploy build to retrieve the `deployment.properties` file. If base parameters are defined, they will override the `deployment.properties` information')
+        // Git information which can override
+        string(name: 'GIT_AUTHOR', defaultValue: '', description: 'Which Git author repository ?')
+        string(name: 'BUILD_BRANCH_NAME', defaultValue: '', description: 'Override `deployment.properties`. Which branch to build ? Set if you are not on a multibranch pipeline.')
+        // Release information which can override
+        booleanParam(name: 'RELEASE', defaultValue: false, description: 'Override `deployment.properties`. Is this build for a release?')
+        string(name: 'PROJECT_VERSION', defaultValue: '', description: 'Override `deployment.properties`. Optional if not RELEASE. If RELEASE, cannot be empty.')
+        string(name: 'GIT_TAG', defaultValue: '', description: 'Git tag to set, if different from PROJECT_VERSION')
+        
+        // Base & promote information
         booleanParam(name: 'BASE_IMAGE_USE_OPENSHIFT_REGISTRY', defaultValue: false, description: 'Set to true if base image should be deployed in Openshift registry.In this case, BASE_IMAGE_REGISTRY_CREDENTIALS, BASE_IMAGE_REGISTRY and BASE_IMAGE_NAMESPACE parameters will be ignored')
         string(name: 'BASE_IMAGE_REGISTRY_CREDENTIALS', defaultValue: '', description: 'Base Image registry credentials to use to deploy images. Will be ignored if no BASE_IMAGE_REGISTRY is given')
         string(name: 'BASE_IMAGE_REGISTRY', defaultValue: '', description: 'Base image registry')
@@ -31,6 +44,13 @@ pipeline {
         OPENSHIFT_API = credentials("OPENSHIFT_API")
         OPENSHIFT_REGISTRY = credentials("OPENSHIFT_REGISTRY")
         OPENSHIFT_CREDS_KEY = "OPENSHIFT_CREDS"
+
+        // TODO to uncomment
+        //BOT_CREDENTIALS_ID = "bsig-gh-bot"
+        BOT_CREDENTIALS_ID = "radtriste-bot"
+
+        // TODO to remove & where used
+        AUTHOR_CREDS_ID = "radtriste"
     }
 
     stages {
@@ -41,6 +61,12 @@ pipeline {
 
                     if (params.DISPLAY_NAME != "") {
                         currentBuild.displayName = params.DISPLAY_NAME
+                    }
+
+                    readDeployProperties()
+
+                    if (isRelease()) {
+                        assert getProjectVersion() != ''
                     }
                 }
             }
@@ -76,6 +102,92 @@ pipeline {
                 }
             }
         }
+        stage('Merge PR and tag') {
+            when {
+                expression { return isRelease() }
+            }
+            steps{
+                script {
+                    dir("operator-main") {
+                        checkoutRepo()
+
+                        // Merge PR
+                        String prLink = getDeployProperty('kogito-cloud-operator.pr.link')
+                        if(prLink != ''){
+                            githubscm.mergePR(prLink, env.AUTHOR_CREDS_ID)
+                            githubscm.pushObject("origin", getBuildBranch(), env.AUTHOR_CREDS_ID)
+                        }
+
+                        if(getGitTag() != ""){
+                            githubscm.tagRepository(getGitTag() , env.BUILD_TAG)
+                            githubscm.pushObject("origin", "--tags ${getGitTag()}", env.AUTHOR_CREDS_ID)
+                        }
+                    }
+                }
+            }
+        }
+        // stage("Create PR on operatorhub") {
+        //     when {
+        //         expression { return isRelease() }
+        //     }
+        //     steps {
+        //         script {
+        //             // This stage will be done in separate issue: 
+        //             // Any problem occuring on those PRs will be backported to operator if needed, for the next version
+
+        //             // // Openshift OperatorHub
+        //             // dir("operatorhub"){
+        //             //     // Example https://github.com/operator-framework/community-operators/pull/1876
+
+        //             //     checkout(githubscm.resolveRepository("community-operators", "operator-framework", master, false))
+        //             //     githubscm.forkRepo(env.BOT_CREDENTIALS_ID)
+        //             //     githubscm.createBranch(getProjectVersion())
+        //             //     // TODO Copy csv files from operator
+        //             //     githubscm.commitChanges(getCommitMessage(), ".")
+        //             //     githubscm.pushObject("origin", getProjectVersion(), env.BOT_CREDENTIALS_ID)
+        //             //     pr = githubscm.createPR(getCommitMessage(), "Generated by build ${BUILD_TAG}: ${BUILD_URL}", "master", env.BOT_CREDENTIALS_ID)
+        //             //     echo "Created PR ${pr}"
+        //             // }
+
+        //             // // Operator io kubernetes
+        //             // dir("kubernetes"){
+        //             //     echo "TODO waiting for example PR from zanini"
+        //             //     //checkout(githubscm.resolveRepository("community-operators", , getBuildBranch(), false))
+        //             // }
+        //         }
+        //     }
+        // }
+        stage('Set next version') {
+            when {
+                expression { return isRelease() }
+            }
+            steps {
+                script {
+                    String prLink = ""
+                    String nextVersion = util.getNextVersion(getProjectVersion(), "micro", "-rc1")
+                    dir("operator-bot"){
+                        checkoutRepo()
+                        githubscm.forkRepo(env.BOT_CREDENTIALS_ID)
+                        githubscm.createBranch(snapshotBranch)
+                        
+                        // Update version
+                        sh "./hack/bump-version.sh ${getProjectVersion()} ${nextVersion}"
+
+                        def commitMsg = "Update snapshot version to ${nextVersion}"
+                        def prBody = "Generated by build ${BUILD_TAG}: ${BUILD_URL}"
+                        githubscm.commitChanges(commitMsg)
+                        githubscm.pushObject("origin", snapshotBranch, env.BOT_CREDENTIALS_ID)
+                        prLink = githubscm.createPR(commitMsg, prBody, getBuildBranch(), env.BOT_CREDENTIALS_ID)
+                    }
+                    dir("operator-main") {
+                        if (prLink != '') {
+                            githubscm.mergePR(prLink, env.AUTHOR_CREDS_ID)
+                            githubscm.pushObject("origin", getBuildBranch(), env.AUTHOR_CREDS_ID)
+                        }
+                    }
+                }
+            }
+        }
     }
     post {
         always {
@@ -84,6 +196,12 @@ pipeline {
             }
         }
     }
+}
+
+void checkoutRepo() {
+    checkout(githubscm.resolveRepository("kogito-cloud-operator", getGitAuthor(), getBuildBranch(), false))
+    // need to manually checkout branch since on a detached branch after checkout command
+    sh "git checkout ${getBuildBranch()}"
 }
 
 void cleanImages(){
@@ -207,4 +325,67 @@ String getNewImageNameSuffix(){
 
 String getNewImageTag(){
     return params.PROMOTE_IMAGE_TAG
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Deployment properties
+//////////////////////////////////////////////////////////////////////////////
+
+void readDeployProperties(){
+    if(params.DEPLOY_BUILD_URL != null){
+        sh "wget ${params.DEPLOY_BUILD_URL}artifact/deployment.properties"
+        deployProperties = readProperties file:"deployment.properties"
+        // echo all properties
+        echo deployProperties.collect{ entry ->  "${entry.key}=${entry.value}" }.join("\n")
+    }
+}
+
+boolean hasDeployProperty(String key){
+    return deployProperties[key] != null
+}
+
+String getDeployProperty(String key){
+    if(hasDeployProperty(key)){
+        return deployProperties[key]
+    }
+    return ""
+}
+
+String getParamOrDeployProperty(String paramKey, String deployPropertyKey){
+    if (params[paramKey] != ""){
+        return params[paramKey]
+    }
+    return getDeployProperty(deployPropertyKey)
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Getter / Setter
+//////////////////////////////////////////////////////////////////////////////
+
+boolean isRelease() {
+    return params.RELEASE || (getDeployProperty("release") == "true")
+}
+
+String getProjectVersion() {
+    return getParamOrDeployProperty("PROJECT_VERSION", "project.version")
+}
+
+String getGitTag() {
+    return params.GIT_TAG != "" ? params.GIT_TAG : getProjectVersion()
+}
+
+String getBuildBranch() {
+    return getParamOrDeployProperty("BUILD_BRANCH_NAME", "git.branch")
+}
+
+String getGitAuthor() {
+    return getParamOrDeployProperty("GIT_AUTHOR", "git.author")
+}
+
+String getSnapshotVersion() {
+    return util.getNextSnapshot(getProjectVersion())
+}
+
+String getCommitMessage(String version){
+    return "Update operator version to ${version}"
 }
