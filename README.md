@@ -6,24 +6,23 @@ The Kogito Operator deploys [Kogito Runtimes](https://github.com/kiegroup/kogito
 
 For information about the Kogito Operator architecture and instructions for using the operator and CLI to deploy Kogito services and infrastructures, see the official [Kogito Documentation](https://docs.jboss.org/kogito/release/latest/html_single/#chap-kogito-deploying-on-openshift) page.
 
-Table of Contents
-=================
+# Table of Contents
 
 * [Contributing to the Kogito Operator](#contributing-to-the-kogito-operator)
- * [Prerequisites](#prerequisites)
- * [Kogito Operator environment](#kogito-operator-environment)
+  * [Prerequisites](#prerequisites)
+  * [Kogito Operator environment](#kogito-operator-environment)
     * [Kogito Operator unit tests](#kogito-operator-unit-tests)
     * [Kogito Operator collaboration and pull requests](#kogito-operator-collaboration-and-pull-requests)
- * [Kogito Operator development](#kogito-operator-development)
+  * [Kogito Operator development](#kogito-operator-development)
     * [Requirements](#requirements)
     * [Building the Kogito Operator](#building-the-kogito-operator)
     * [Deploying to OpenShift 4.x for development purposes](#deploying-to-openshift-4x-for-development-purposes)
     * [Running BDD Tests](#running-bdd-tests)
-       * [Running BDD tests with current branch](#running-bdd-tests-with-current-branch)
-       * [Running BDD tests with custom Kogito Build images' version](#running-bdd-tests-with-custom-kogito-build-images-version)
-       * [Running smoke tests](#running-smoke-tests)
-       * [Running performance tests](#running-performance-tests)
-       * [List of test tags](#list-of-test-tags)
+      * [Running BDD tests with current branch](#running-bdd-tests-with-current-branch)
+      * [Running BDD tests with custom Kogito Build images' version](#running-bdd-tests-with-custom-kogito-build-images-version)
+      * [Running smoke tests](#running-smoke-tests)
+      * [Running performance tests](#running-performance-tests)
+      * [List of test tags](#list-of-test-tags)
     * [Running the Kogito Operator locally](#running-the-kogito-operator-locally)
 
 Created by [gh-md-toc](https://github.com/ekalinin/github-markdown-toc)
