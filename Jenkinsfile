@@ -17,6 +17,8 @@ pipeline {
         WORKING_DIR = "/home/jenkins/go/src/github.com/kiegroup/kogito-cloud-operator/"
         GOPATH = "/home/jenkins/go"
         GOCACHE = "/home/jenkins/go/.cache/go-build"
+
+        OPENSHIFT_INTERNAL_REGISTRY = "image-registry.openshift-image-registry.svc:5000"
     }
     stages {
         stage('Clean Workspace') {
@@ -69,11 +71,27 @@ pipeline {
                 }
             }
         }
+        stage("Build examples' images for testing"){
+            steps {
+                script {
+                    dir ("${WORKING_DIR}") {
+                        // Do not build native images for the PR checks
+                        sh "make build-examples-images tags='~@native' concurrent=1 ${getBDDParameters('never', false)}"
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'test/logs/**/*.log', allowEmptyArchive: true
+                    junit testResults: 'test/logs/**/junit.xml', allowEmptyResults: true
+                }
+            }
+        }
         stage('Running Smoke Testing') {
             steps {
                 dir ("${WORKING_DIR}") {
                     sh """
-                        make run-smoke-tests load_factor=3 load_default_config=true operator_image=${OPENSHIFT_REGISTRY}/openshift/kogito-cloud-operator operator_tag=pr-\$(echo \${GIT_COMMIT} | cut -c1-7) maven_mirror=${MAVEN_MIRROR_REPOSITORY} concurrent=3
+                        make run-smoke-tests concurrent=3 ${getBDDParameters('always', true)}
                     """
                 }
             }
@@ -88,4 +106,29 @@ pipeline {
             }
         }
     }
+}
+
+String getBDDParameters(String image_cache_mode, boolean runtime_app_registry_internal=false) {
+    testParamsMap = [:]
+
+    testParamsMap["load_default_config"] = true
+    testParamsMap["ci"] = "jenkins"
+    testParamsMap["load_factor"] = 3
+
+    testParamsMap["operator_image"] = "${OPENSHIFT_REGISTRY}/openshift/kogito-cloud-operator"
+    testParamsMap["operator_tag"] = "pr-\$(echo \${GIT_COMMIT} | cut -c1-7)"
+    testParamsMap["maven_mirror"] = env.MAVEN_MIRROR_REPOSITORY
+    
+    // runtime_application_image are built in this pipeline so we can just use Openshift registry for them
+    testParamsMap["image_cache_mode"] = image_cache_mode
+    testParamsMap["runtime_application_image_registry"] = runtime_app_registry_internal ? env.OPENSHIFT_INTERNAL_REGISTRY : env.OPENSHIFT_REGISTRY
+    testParamsMap["runtime_application_image_namespace"] = "openshift"
+    testParamsMap["runtime_application_image_version"] = "pr-\$(echo \${GIT_COMMIT} | cut -c1-7)"
+    
+    // Use podman container engine in tests
+    testParamsMap['container_engine'] = 'podman'
+
+    String testParams = testParamsMap.collect{ entry -> "${entry.getKey()}=\"${entry.getValue()}\"" }.join(" ")
+    echo "BDD parameters = ${testParams}"
+    return testParams
 }
